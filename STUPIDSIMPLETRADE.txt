@@ -1,0 +1,175 @@
+import requests
+import time
+
+# Global variable to store the time when the buy order was placed
+buy_order_time = None
+
+def get_best_bid():
+    market_data_url = 'https://api.xeggex.com/api/v2/ticker/**YOUR-TICKER**/USDT'
+    
+    response = requests.get(market_data_url)
+    
+    if response.status_code == 200:
+        market_data = response.json()
+        best_bid = float(market_data.get('bestBid', 0))
+        return best_bid
+    else:
+        print("Error retrieving market data:", response.text)
+        return None
+
+def get_open_orders():
+    open_orders_url = 'https://api.xeggex.com/api/v2/openorders'
+    
+    headers = {
+        'accept': 'application/json',
+        'Authorization': 'Basic **YOUR AUTHENTICATION FROM XEGGEX API SECTION**',
+    }
+    
+    response = requests.get(open_orders_url, headers=headers)
+    
+    if response.status_code == 200:
+        open_orders = response.json()
+        return open_orders
+    else:
+        print("Error retrieving open orders:", response.text)
+        return None
+
+def has_existing_buy_order(symbol):
+    open_orders = get_open_orders()
+    
+    if open_orders is not None:
+        for order in open_orders:
+            if order['symbol'] == symbol and order['side'] == 'buy':
+                return True
+    return False
+
+def place_buy_order(best_bid_price):
+    create_order_url = 'https://api.xeggex.com/api/v2/createorder'
+    
+    headers = {
+        'accept': 'application/json',
+        'Authorization': 'Basic **YOUR AUTHENTICATION FROM XEGGEX API SECTION**',
+        'Content-Type': 'application/json'
+    }
+    
+    buy_price = best_bid_price + 0.00000001  #HOW MUCH YOU WANT TO INCRESE THE BEST BID
+    
+    # Payload for creating order
+    create_order_payload = {
+        "userProvidedId": "null",
+        "symbol": "**YOUR-TICKER**/USDT",
+        "side": "buy",
+        "type": "limit",
+        "quantity": "10000", #QUANTITY YOU WANT TO BUY 
+        "price": str(buy_price),
+        "strictValidate": False
+    }
+    
+    # Send POST request to create buy order
+    response = requests.post(create_order_url, headers=headers, json=create_order_payload)
+    
+    # Check if the response is successful
+    if response.status_code == 200:
+        global buy_order_time
+        buy_order_time = time.time()  # Record the time when the buy order was placed
+        response_json = response.json()
+        order_id = response_json.get('id')
+        price = response_json.get('price')
+        print(f"Buy order {order_id} placed successfully. Price: {price}")
+        return order_id, price
+    else:
+        print("Error placing buy order:", response.text)
+        return None, None
+
+# Function to place a sell order
+def place_sell_order(price):
+    create_order_url = 'https://api.xeggex.com/api/v2/createorder'
+    
+    headers = {
+        'accept': 'application/json',
+        'Authorization': 'Basic **YOUR AUTHENTICATION FROM XEGGEX API SECTION**',
+        'Content-Type': 'application/json'
+    }
+    
+    # Adjust the sell price
+    sell_price = float(price) + 0.0000003 #HOW MUCH YOU WANT TO INCREASE SELL PRICE 
+    
+    # Payload for selling order
+    sell_order_payload = {
+        "userProvidedId": "null",
+        "symbol": "**YOUR-TICKER**/USDT",
+        "side": "sell",
+        "type": "limit",
+        "quantity": "10000", #QUANTITY YOU WANT TO SELL ( SHOULD BE SAME OR LOWER THAN BUY AMOUNT) 
+        "price": str(sell_price),
+        "strictValidate": False
+    }
+    
+    # Send POST request to create sell order
+    response = requests.post(create_order_url, headers=headers, json=sell_order_payload)
+    
+    # Check if the response is successful
+    if response.status_code == 200:
+        response_json = response.json()
+        order_id = response_json.get('id')
+        print(f"Sell order {order_id} placed successfully.")
+        return order_id
+    else:
+        print("Error placing sell order:", response.text)
+        return None
+
+# Function to check order status
+def check_order_status(order_id):
+    get_order_url = 'https://api.xeggex.com/api/v2/getorder'
+    
+    headers = {
+        'accept': 'application/json',
+        'Authorization': 'Basic **YOUR AUTHENTICATION FROM XEGGEX API SECTION**',
+        'Content-Type': 'application/json'
+    }
+    
+    # Send GET request to retrieve order details
+    get_order_response = requests.get(f"{get_order_url}/{order_id}", headers=headers)
+    
+    # Check if the GET request is successful
+    if get_order_response.status_code == 200:
+        order_details = get_order_response.json()
+        remain_quantity = float(order_details.get('remainQuantity', 0))
+        if remain_quantity > 0:
+            return False
+        else:
+            executed_quantity = float(order_details.get('executedQuantity', 0))
+            executed_price = float(order_details.get('price', 0))
+            print(f"Trade completed successfully. Executed quantity: {executed_quantity}, Price: {executed_price}")
+            return True
+    else:
+        print("Error retrieving order details:", get_order_response.text)
+        return False
+
+# Main loop
+while True:
+    # Check if there is an existing buy order
+    if not has_existing_buy_order("**YOUR-TICKER**/USDT"):
+        best_bid_price = get_best_bid()
+        
+        if best_bid_price is not None:
+            buy_order_id, buy_price = place_buy_order(best_bid_price)
+            
+            if buy_order_id is not None:
+                while not check_order_status(buy_order_id):
+                    time.sleep(10)  # Check every 10 seconds
+                
+                sell_order_id = place_sell_order(buy_price)
+                
+                while sell_order_id:
+                    if check_order_status(sell_order_id):
+                        break
+                    time.sleep(10)  # Check every 10 seconds
+            else:
+                print("Error in buy order. Retrying...")
+        else:
+            print("Error retrieving best bid. Retrying...")
+    else:
+        print("Existing buy order found. Skipping new buy order placement.")
+    
+    time.sleep(10)  # Wait before retrying
